@@ -114,7 +114,7 @@ def post_by_category(request, category_slug):
      posts = Post.objects.filter(
         category=category,
         status='published'
-     ).select_realted('author', 'category').order_by('-created_at')
+     ).select_related('author', 'category').order_by('-created_at')
 
      serializer = PostListSerializer(posts, many=True, context={'request': request})
 
