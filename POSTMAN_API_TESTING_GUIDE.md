@@ -1,6 +1,6 @@
 # Руководство по тестированию API в Postman
 
-Ниже описан практический сценарий тестирования всех текущих endpoint вашего API (приложения **accounts** и **main**).
+Ниже описан практический сценарий тестирования всех текущих endpoint вашего API (приложения **apps.accounts**, **apps.main** и **apps.comments**).
 
 ## 1) Доступные endpoint
 
@@ -36,6 +36,18 @@ Endpoint'ы:
 - `GET /recent/` — до 10 последних опубликованных
 - `GET/PUT/PATCH/DELETE /<slug>/` — детали, правки, удаление (редактирование — только автор)
 
+### 1.3 Comments — комментарии к постам (`apps.comments`)
+
+Базовый префикс:
+- `{{base_url}}/api/v1/comments/`
+
+Endpoint'ы:
+- `GET/POST /` — список (фильтры, поиск, сортировка) и создание комментария (`POST` только с авторизацией)
+- `GET/PUT/PATCH/DELETE /<id>/` — детали, правка текста, «удаление» (мягкое: `is_active=false`; правки — только автор)
+- `GET /my-comments/` — комментарии текущего пользователя (только с авторизацией)
+- `GET /post/<post_id>/` — дерево комментариев к **опубликованному** посту (корневые комментарии с вложенными `replies`)
+- `GET /<comment_id>/replies/` — ответы на конкретный комментарий (плоский список + метаданные родителя)
+
 ## 2) Подготовка Postman
 
 Создайте Environment (например, `local`) и переменные:
@@ -48,6 +60,8 @@ Endpoint'ы:
 - `category_slug` = (пусто; заполнить после создания категории)
 - `category_id` = (пусто; числовой `id` для привязки поста)
 - `post_slug` = (пусто; `slug` поста для деталей и правок)
+- `post_id` = (пусто; числовой `id` **опубликованного** поста для комментариев)
+- `comment_id` = (пусто; числовой `id` комментария для деталей, правок и ответов)
 
 В Collection настройте Authorization:
 - Type: `Bearer Token`
@@ -332,6 +346,13 @@ if (Array.isArray(items) && items.length) {
 
 Каждый успешный **GET** увеличивает `views_count` на сервере. Ожидание: `200 OK`, расширенные поля (`author_info`, `category_info` и т.д.).
 
+Tests (опционально — сохранить `post_id` для сценария комментариев):
+
+```javascript
+const json = pm.response.json();
+if (json.id) pm.environment.set("post_id", String(json.id));
+```
+
 ### 3.17 Изменение поста
 
 **PUT** или **PATCH** `{{base_url}}/api/v1/posts/{{post_slug}}/`  
@@ -354,6 +375,127 @@ if (Array.isArray(items) && items.length) {
 
 **DELETE** `{{base_url}}/api/v1/posts/{{post_slug}}/` — только автор.
 
+### 3.21 Comments — общие замечания
+
+1. Для **POST** комментария нужен Bearer `{{access_token}}`. **GET** списка (`/`) и деталей (`/<id>/`) разрешены без токена (чтение для всех).
+2. Комментарий можно создать только к посту со `status=published` (иначе валидация сериализатора → `400`).
+3. В теле ответа **POST /** сериализатор создания отдаёт в основном `post`, `parent`, `content`. Числовой **`id`** нового комментария удобно взять из **GET** `.../my-comments/` или **GET** `.../?post={{post_id}}` (см. примеры Tests ниже).
+4. Перед сценарием комментариев опубликуйте пост (`PATCH` поста с `"status": "published"`) или создайте пост сразу с `"status": "published"`, и сохраните его **`id`** в `post_id` (например из **GET** `.../posts/{{post_slug}}/` в ответе есть `id`).
+
+### 3.22 Список комментариев
+
+**GET** `{{base_url}}/api/v1/comments/`  
+
+Query (опционально):
+- фильтры: `?post=`, `?author=`, `?parent=` (для корневых к посту часто `?parent=` пусто не фильтрует — для «только корневые» используйте **GET** `/post/<post_id>/`);
+- поиск: `?search=текст`;
+- сортировка: `?ordering=-created_at`, `updated_at` и т.д.
+
+Ожидание: `200 OK`, массив объектов с полями вроде `id`, `content`, `author_info`, `parent`, `replies_count`, `is_reply`, `created_at`, `updated_at`.
+
+### 3.23 Создание комментария
+
+**POST** `{{base_url}}/api/v1/comments/`  
+(с Bearer)  
+Body (raw JSON), корневой комментарий:
+
+```json
+{
+  "post": 1,
+  "parent": null,
+  "content": "Отличная статья, спасибо!"
+}
+```
+
+Подставьте реальный id опубликованного поста вместо `1` или `"post": {{post_id}}` (в Postman для числа можно оставить без кавычек в raw JSON, подставив значение вручную).
+
+Ответ на другой комментарий (тот же пост):
+
+```json
+{
+  "post": 1,
+  "parent": 5,
+  "content": "Согласен с автором комментария выше."
+}
+```
+
+`parent` должен относиться к тому же `post`, иначе `400`.
+
+Ожидание: `201 Created`.
+
+Tests (сохранить `comment_id` из списка по посту):
+
+```javascript
+pm.test("Status is 201", () => pm.response.to.have.status(201));
+```
+
+Затем **GET** `{{base_url}}/api/v1/comments/?post={{post_id}}` (подставьте число вручную, если переменная не подставляется в query), сортировка по умолчанию новые сверху — в **Tests**:
+
+```javascript
+pm.test("Status is 200", () => pm.response.to.have.status(200));
+const items = pm.response.json();
+if (Array.isArray(items) && items.length) {
+  pm.environment.set("comment_id", String(items[0].id));
+}
+```
+
+### 3.24 Детальный просмотр комментария
+
+**GET** `{{base_url}}/api/v1/comments/{{comment_id}}/`  
+
+Ожидание: `200 OK`, расширенные поля, для корневого комментария — вложенный массив `replies` (активные ответы).
+
+### 3.25 Изменение комментария
+
+**PUT** или **PATCH** `{{base_url}}/api/v1/comments/{{comment_id}}/`  
+Только **автор** комментария (иначе `403` на запись). Тело для **PATCH**:
+
+```json
+{
+  "content": "Обновлённый текст комментария"
+}
+```
+
+Ожидание: `200 OK`.
+
+### 3.26 Удаление комментария (мягкое)
+
+**DELETE** `{{base_url}}/api/v1/comments/{{comment_id}}/` — только автор.
+
+Ожидание: `204 No Content` — запись помечается `is_active=false` и больше не попадает в выдачу списков с активными комментариями.
+
+### 3.27 Мои комментарии
+
+**GET** `{{base_url}}/api/v1/comments/my-comments/`  
+Только с Bearer. Фильтры: `?post=`, `?parent=`, `?is_active=true|false`, плюс `search`, `ordering`.
+
+Tests (зафиксировать последний комментарий):
+
+```javascript
+const items = pm.response.json();
+if (Array.isArray(items) && items.length) {
+  pm.environment.set("comment_id", String(items[0].id));
+}
+```
+
+### 3.28 Комментарии к посту (дерево для UI)
+
+**GET** `{{base_url}}/api/v1/comments/post/{{post_id}}/`  
+
+Публичный запрос. Ожидание: `200 OK`, JSON вида:
+
+- `post`: `id`, `title`, `slug`
+- `comments`: массив корневых комментариев с вложенными `replies`
+- `comments_count`: число активных комментариев к посту
+
+Если пост не опубликован или не существует → `404`.
+
+### 3.29 Ответы на комментарий
+
+**GET** `{{base_url}}/api/v1/comments/{{comment_id}}/replies/`  
+
+Публичный запрос. Ожидание: `200 OK`, поля `parent_comment`, `replies`, `replies_count`. Если родитель не найден или неактивен → `404`.
+
 ## 4) Негативные тесты (обязательно)
 
 Минимальный набор:
@@ -372,6 +514,14 @@ if (Array.isArray(items) && items.length) {
 - `GET /api/v1/posts/categories/non-existent-slug/posts/` -> `404`
 - невалидные данные при создании (пустой `title` и т.п.) -> `400`
 
+Дополнительно для **comments**:
+- `POST /api/v1/comments/` без Bearer -> `401`
+- `GET /api/v1/comments/my-comments/` без Bearer -> `401`
+- `POST /api/v1/comments/` с `post`, указывающим на черновик или несуществующий id -> `400`
+- `PUT/PATCH/DELETE /api/v1/comments/<id>/` чужого комментария -> `403` (для методов с телом)
+- `GET /api/v1/comments/post/<id>/` для неопубликованного или несуществующего поста -> `404`
+- `POST` с `parent`, относящимся к другому посту, чем в `post` -> `400`
+
 ## 5) Рекомендуемая структура коллекции
 
 Папки в Postman:
@@ -382,6 +532,8 @@ if (Array.isArray(items) && items.length) {
 - `Main Categories` (список, создание, деталь, посты по категории, удаление)
 - `Main Posts` (список, создание, деталь, мои посты, popular, recent, правки, удаление)
 - `Main Negative`
+- `Comments` (список, создание, деталь, мои, по посту, ответы, правка, удаление)
+- `Comments Negative`
 
 Названия запросов:
 - `[POS] Register`
@@ -390,4 +542,7 @@ if (Array.isArray(items) && items.length) {
 - `[POS] Main Create Category`
 - `[POS] Main Create Post`
 - `[POS] Main My Posts`
+- `[POS] Comments Create`
+- `[POS] Comments By Post`
+- `[POS] Comments Replies`
 - и т.д.
