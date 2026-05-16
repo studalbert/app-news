@@ -234,8 +234,9 @@ def cancel_subscription(request):
         return Response({
             'error': 'No subscription found'
         }, status=status.HTTP_404_NOT_FOUND)
+        
 
-
+@api_view(['GET'])
 @permission_classes([permissions.AllowAny])
 def pinned_posts_list(request):
     """Возвращает список всех закрепленных постов для отображения в топе"""
