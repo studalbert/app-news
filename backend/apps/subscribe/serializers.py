@@ -16,7 +16,7 @@ class SubscriptionPlanSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         """Переопределение для гарантии корректного вывода"""
-        data = super().to_representationo(instance)
+        data = super().to_representation(instance)
 
         # Убедиться, что feauters - это объект
         if not data.get('features'):
